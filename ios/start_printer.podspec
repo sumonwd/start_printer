@@ -17,9 +17,8 @@ A new Flutter plugin project.
   s.dependency 'Flutter'
   s.platform = :ios, '11.0'
 
-  # Star Micronics dependencies
-  s.dependency 'StarIO', '~> 2.8.0'
-  s.dependency 'StarIO_Extension', '~> 1.15.0'
+  # Use local references to the SDK files
+  s.vendored_frameworks = 'Frameworks/StarIO.framework', 'Frameworks/StarIO_Extension.framework'
 
 # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
