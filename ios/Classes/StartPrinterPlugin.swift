@@ -4,771 +4,864 @@ import StarIO
 import StarIO_Extension
 
 public class StartPrinterPlugin: NSObject, FlutterPlugin {
-  public static func register(with registrar: FlutterPluginRegistrar) {
-    let channel = FlutterMethodChannel(name: "start_printer", binaryMessenger: registrar.messenger())
-    let instance = StartPrinterPlugin()
-    registrar.addMethodCallDelegate(instance, channel: channel)
-  }
-
-  public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-    switch (call.method) {
+    public static func register(with registrar: FlutterPluginRegistrar) {
+        let channel = FlutterMethodChannel(name: "start_printer", binaryMessenger: registrar.messenger())
+        let instance = StartPrinterPlugin()
+        registrar.addMethodCallDelegate(instance, channel: channel)
+    }
+    
+    public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        switch call.method {
         case "portDiscovery":
             portDiscovery(call, result: result)
-            break;
         case "checkStatus":
             checkStatus(call, result: result)
-            break;
         case "print":
             print(call, result: result)
+        case "connect":
+            connect(call, result: result)
         default:
             result(FlutterMethodNotImplemented)
+        }
     }
-  }
-  public func portDiscovery(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-      let arguments = call.arguments as! Dictionary<String, AnyObject>
-      let type = arguments["type"] as! String
-      do {
-          var info = [Dictionary<String,String>]()
-          if ( type == "Bluetooth" || type == "All") {
-              let btPortInfoArray = try SMPort.searchPrinter(target: "BT:")
-              for printer in btPortInfoArray {
-                  info.append(portInfoToDictionary(portInfo: printer as! PortInfo))
-              }
-          }
-          if ( type == "LAN" || type == "All") {
-              let lanPortInfoArray = try SMPort.searchPrinter(target: "TCP:")
-              for printer in lanPortInfoArray {
-                  info.append(portInfoToDictionary(portInfo: printer as! PortInfo))
-              }
-          }
-          if ( type == "USB" || type == "All") {
-              let usbPortInfoArray = try SMPort.searchPrinter(target: "USB:")
-              for printer in usbPortInfoArray {
-                  info.append(portInfoToDictionary(portInfo: printer as! PortInfo))
-              }
-          }
-          result(info)
-      } catch {
-          result(
-              FlutterError.init(code: "PORT_DISCOVERY_ERROR", message: error.localizedDescription, details: nil)
-          )
-      }
-  }
-
-  public func checkStatus (_ call: FlutterMethodCall, result: @escaping FlutterResult){
-      let arguments = call.arguments as! Dictionary<String, AnyObject>
-      let portName = arguments["portName"] as! String
-      let emulation = arguments["emulation"] as! String
-      var port:SMPort
-      var status: StarPrinterStatus_2 = StarPrinterStatus_2()
-      do {
-          port = try SMPort.getPort(portName: portName, portSettings: getPortSettingsOption(emulation), ioTimeoutMillis: 10000)
-          defer {
-              SMPort.release(port)
-          }
-          if #available(iOS 11.0, *){
-              if(portName.uppercased().hasPrefix("BT:")) {
-                  usleep(200000) //sleep 0.2 seconds
-              }
-          }
-          try port.getParsedStatus(starPrinterStatus: &status, level: 2)
-          var firmwareInformation: Dictionary =  [AnyHashable:Any]()
-          var errorMsg:String?
-          
-          do {
-              firmwareInformation = try port.getFirmwareInformation()
-          } catch {
-              errorMsg = error.localizedDescription
-          }
-          result(portStatusToDictionary(status: status,firmwareInformation: firmwareInformation,errorMsg: errorMsg))
-      } catch {
-          result(
-                FlutterError.init(code: "CHECK_STATUS_ERROR", message: error.localizedDescription, details: nil)
-            )
-      }
-  }
-  
-  public func print(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-      let arguments = call.arguments as! Dictionary<String, AnyObject>
-      let portName = arguments["portName"] as! String
-      let emulation = arguments["emulation"] as! String
-      let printCommands = arguments["printCommands"] as! Array<Dictionary<String,Any>>
-
-      
-      let portSettings :String = getPortSettingsOption(emulation)
-      let starEmulation :StarIoExtEmulation = getEmulation(emulation)
-      let builder:ISCBBuilder = StarIoExt.createCommandBuilder(starEmulation)
-      builder.beginDocument()
-      appendCommands(builder: builder, printCommands: printCommands)
-      builder.endDocument()
-      sendCommand(portName: portName, portSetting: portSettings, command: [UInt8](builder.commands.copy() as! Data),result: result)
-      
-  }
-  
-  func portInfoToDictionary(portInfo: PortInfo) -> Dictionary<String,String>{
-      return [
-          "portName": portInfo.portName,
-          "macAddress": portInfo.macAddress,
-          "modelName": portInfo.modelName
-      ]
-  }
-  
-  func getPortSettingsOption(_ emulation:String) ->String {
-      switch (emulation) {
-          case "EscPosMobile": return "mini"
-          case "EscPos": return "escpos"
-          case "StarPRNT","StarPRNTL" : return "Portable;l"
-          default: return emulation
-      }
-  }
-  func portStatusToDictionary(status: StarPrinterStatus_2,firmwareInformation:Dictionary<AnyHashable,Any>,errorMsg:String?) ->Dictionary<AnyHashable,Any> {
-      let SM_TRUE =  SM_TRUESHARED
-      let dict: Dictionary<AnyHashable,Any> =  [
-          "coverOpen" :status.coverOpen == SM_TRUE,
-          "offline": status.offline == SM_TRUE,
-          "overTemp": status.overTemp == SM_TRUE,
-          "cutterError" :status.cutterError == SM_TRUE,
-          "receiptPaperEmpty": status.receiptPaperEmpty == SM_TRUE,
-          "is_success": true,
-          "error_message" :errorMsg ?? "",
-      ]
-      return dict.merging(firmwareInformation){ (current, _) in current }
-  }
-  func getEmulation(_ emulation: String) -> StarIoExtEmulation {
-      if (emulation == "StarPRNT") {
-          return StarIoExtEmulation.starPRNT
-      } else if (emulation == "StarPRNTL") {
-          return StarIoExtEmulation.starPRNTL
-      } else if (emulation == "StarLine") {
-          return StarIoExtEmulation.starLine
-      } else if (emulation == "StarGraphic") {
-          return StarIoExtEmulation.starGraphic
-      } else if (emulation == "EscPos") {
-          return StarIoExtEmulation.escPos
-      } else if (emulation == "EscPosMobile") {
-          return StarIoExtEmulation.escPosMobile
-      } else if (emulation == "StarDotImpact") {
-          return StarIoExtEmulation.starDotImpact
-      } else {
-          return StarIoExtEmulation.starLine
-      }
-  }
-  func appendCommands(builder: ISCBBuilder,printCommands: Array<Dictionary<AnyHashable,Any>>) {
-      var encoding:String.Encoding = .ascii
-      for command in printCommands {
-          if (command["appendInternational"] != nil) {
-              builder.append(getInternational(command["appendInternational"] as? String))
-          } else if (command["appendCharacterSpace"] != nil) {
-              builder.appendCharacterSpace(command["appendCharacterSpace"] as! Int)
-          } else if (command["appendEncoding"] != nil) {
-              encoding = getEncoding(command["appendEncoding"] as? String)
-          } else if (command["appendCodePage"] != nil) {
-              builder.append(getCodePageType(command["appendCodePage"] as? String))
-          } else if (command["append"] != nil) {
-              builder.append((command["append"] as! String).data(using: encoding))
-          } else if (command["appendRaw"] != nil) {
-              builder.appendRawData((command["appendRaw"] as! String).data(using: encoding))
-          } else if (command["appendEmphasis"] != nil) {
-              builder.appendData(withEmphasis: (command["appendEmphasis"] as! String).data(using: encoding))
-          } else if (command["enableEmphasis"] != nil) {
-              builder.appendEmphasis(command["enableEmphasis"] as! Bool)
-          } else if (command["appendInvert"] != nil) {
-              builder.appendData(withInvert: (command["appendInvert"] as! String).data(using: encoding))
-          } else if (command["enableInvert"] != nil) {
-              builder.appendInvert(command["enableInvert"] as! Bool)
-          } else if (command["appendUnderline"] != nil) {
-              builder.appendData(withUnderLine: (command["appendUnderline"] as! String).data(using: encoding))
-          } else if (command["enableUnderline"] != nil) {
-              builder.appendUnderLine(command["enableUnderline"] as! Bool)
-          } else if (command["appendLineFeed"] != nil) {
-              builder.appendLineFeed(command["appendLineFeed"] as! Int)
-          } else if (command["appendUnitFeed"] != nil) {
-              builder.appendUnitFeed(command["appendUnitFeed"] as! Int)
-          } else if (command["appendLineSpace"] != nil) {
-              builder.appendUnitFeed(command["appendLineSpace"] as! Int)
-          } else if (command["appendFontStyle"] != nil) {
-              builder.append(getFont(command["appendFontStyle"] as? String))
-          } else if (command["appendCutPaper"] != nil) {
-              builder.appendCutPaper(getCutPaperAction(command["appendCutPaper"] as? String))
-          } else if (command["openCashDrawer"] != nil) {
-              builder.appendPeripheral(getPeripheralChannel(command["openCashDrawer"] as? NSNumber))
-          } else if (command["appendBlackMark"] != nil) {
-              builder.append(getBlackMarkType(command["appendBlackMark"] as? String))
-          } else if (command["appendBytes"] != nil) {
-              let byteArray = Data((command["appendBytes"] as! FlutterStandardTypedData).data)
-              builder.appendBytes([UInt8](byteArray), length: UInt([UInt8](byteArray).count))
-          } else if (command["appendRawBytes"] != nil) {
-              let byteArray = Data((command["appendRawBytes"] as! FlutterStandardTypedData).data)
-              builder.appendRawBytes([UInt8](byteArray), length: UInt([UInt8](byteArray).count))
-          } else if (command["appendAbsolutePosition"] != nil) {
-              if (command["data"] != nil) {
-                  builder.appendData(withAbsolutePosition: (command["data"] as! String).data(using: encoding), position: command["appendAbsolutePosition"] as! Int)
-              } else {
-                  builder.appendAbsolutePosition(command["appendAbsolutePosition"] as! Int)
-              }
-          } else if (command["appendAlignment"] != nil) {
-              if (command["data"] != nil) {
-                  builder.appendData(withAlignment: (command["data"] as! String).data(using: encoding), position: getAlignment(command["appendAlignment"] as? String))
-              } else {
-                  builder.appendAlignment(getAlignment(command["appendAlignment"] as? String))
-              }
-          } else if (command["appendHorizontalTabPosition"] != nil) {
-              builder.appendHorizontalTabPosition(command["appendHorizontalTabPosition"] as? Array<NSNumber>)
-          } else if (command["appendMultiple"] != nil) {
-              let width = command["width"] != nil ? command["width"] as! Int : 2
-              let height = command["height"] != nil ? command["height"] as! Int : 2
-              builder.appendData(withMultiple: (command["appendMultiple"] as! String).data(using: encoding), width: width, height: height)
-          } else if (command["enableMultiple"] != nil) {
-              let width = command["width"] != nil ? command["width"] as! Int : 1
-              let height = command["height"] != nil ? command["height"] as! Int : 1
-              if ( command["enableMultiple"] as! Bool) == true {
-                  builder.appendMultiple(width, height: height)
-              } else {
-                  builder.appendMultiple(1, height: 1)
-              }
-          } else if (command["appendLogo"] != nil) {
-              if (command["logoSize"] != nil) {
-                  builder.appendLogo(getLogoSize(command["logoSize"] as? String), number: command["appendLogo"] as! Int)
-              } else {
-                  builder.appendLogo(SCBLogoSize.normal, number: command["appendLogo"] as! Int)
-              }
-          } else if (command["appendBarcode"] != nil) {
-              let barcodeSymbology :SCBBarcodeSymbology = getBarcodeSymbology(command["BarcodeSymbology"] as? String)
-              let barcodeWidth :SCBBarcodeWidth = getBarcodeWidth(command["BarcodeWidth"] as? String)
-              let height = command["height"] != nil ? command["height"] as! Int : 40
-              let hri = command["hri"] != nil ? command["hri"] as! Bool : true
-
-              if (command["absolutePosition"] != nil) {
-                  builder.appendBarcodeData(withAbsolutePosition: (command["appendBarcode"] as! String).data(using: encoding), symbology: barcodeSymbology, width: barcodeWidth, height: height, hri: hri, position: command["absolutePosition"] as! Int)
-              } else if (command["alignment"] != nil) {
-                  builder.appendBarcodeData(withAlignment: (command["appendBarcode"] as! String).data(using: encoding), symbology: barcodeSymbology, width: barcodeWidth, height: height, hri: hri, position: getAlignment(command["alignment"] as? String))
-              } else {
-                  builder.appendBarcodeData((command["appendBarcode"] as! String).data(using: encoding), symbology: barcodeSymbology, width: barcodeWidth, height: height, hri: hri)
-              }
-          } else if (command["appendQrCode"] != nil) {
-              let qrCodeModel = getQrCodeModel(command["QrCodeModel"] as? String)
-              let qrCodeLevel = getQrCodeLevel(command["QrCodeLevel"] as? String)
-              let cell = command["cell"] != nil ? command["cell"] as! Int : 4
-              if (command["absolutePosition"] != nil) {
-                  builder.appendQrCodeData(withAbsolutePosition: (command["appendQrCode"] as! String).data(using: encoding), model: qrCodeModel, level: qrCodeLevel, cell: cell, position: command["absolutePosition"] as! Int)
-              } else if (command["alignment"] != nil){
-                  builder.appendQrCodeData(withAlignment: (command["appendQrCode"] as! String).data(using: encoding), model: qrCodeModel, level: qrCodeLevel, cell: cell, position: getAlignment(command["alignment"] as? String))
-              } else {
-                  builder.appendQrCodeData((command["appendQrCode"] as! String).data(using: encoding), model: qrCodeModel, level: qrCodeLevel, cell: cell)
-              }
-          }else if (command["appendBitmap"] != nil) {
-              let urlString = command["appendBitmap"] as? String
-              let width = command["width"] != nil ? (command["width"] as? NSNumber)?.intValue ?? 0 : 576
-              let diffusion = ((command["diffusion"] as? NSNumber)?.boolValue ?? false == false) ? false : true
-              let bothScale = ((command["bothScale"] as? NSNumber)?.boolValue ?? false == false) ? false : true
-              let rotation = getBitmapConverterRotation(command["rotation"] as? String)
-              let error: Error? = nil
-              let imageURL = URL(string: urlString ?? "")
-              var imageData: Data? = nil
-              do {
-                  if let imageURL = imageURL {
-                      imageData = try Data(contentsOf: imageURL, options: .uncached)
-                  }
-              } catch {
-                  let fileImageURL = URL(fileURLWithPath: urlString ?? "")
-                  do {
-                      imageData = try Data(contentsOf: fileImageURL)
-                  } catch {
-                  }
-              }
-              if imageData != nil {
-                  let image = UIImage(data: imageData!)
-                  if command["absolutePosition"] != nil {
-                      let position = ((command["absolutePosition"] as? NSNumber)?.intValue ?? 0) != 0 ? (command["absolutePosition"] as? NSNumber)?.intValue ?? 0 : 40
-                      builder.appendBitmap(withAbsolutePosition: image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: position)
-                  } else if command["alignment"] != nil {
-                      let alignment = getAlignment(command["alignment"] as?  String)
-                      builder.appendBitmap(withAlignment: image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: alignment)
-                  } else {
-                      builder.appendBitmap(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation)
-                  }
-              }
-          } else if (command["appendBitmapText"] != nil) {
-              let text:String = command["appendBitmapText"] as! String
-              let width = command["width"] != nil ? command["width"] as! Int : 576
-              let fontName = command["font"] != nil ? command["font"] as! String : "Menlo"
-              let fontSize = command["fontSize"] != nil ? command["fontSize"] as! Int : 12
-              let bothScale = command["bothScale"] != nil ? command["bothScale"] as! Bool : true
-              let rotation = SCBBitmapConverterRotation.normal;
-              let font:UIFont = UIFont(name:fontName,size:CGFloat(fontSize*2))!
-              let image = imageWithString(string: text, font: font, width: CGFloat(width))
-              if (command["alignment"] != nil) {
-                  builder.appendBitmap(withAlignment: image, diffusion: false, width: width, bothScale: bothScale, rotation: rotation, position: getAlignment(command["alignment"] as? String))
-              } else {
-                  builder.appendBitmap(image, diffusion: false)
-              }
-          } else if (command["appendBitmapByteArray"] != nil) {
-              let data:FlutterStandardTypedData = command["appendBitmapByteArray"] as! FlutterStandardTypedData
-              let image = UIImage(data: data.data)!
-              let width = command["width"] != nil ? (command["width"] as? NSNumber)?.intValue ?? 0 : 576
-              let bothScale = command["bothScale"] != nil ? command["bothScale"] as! Bool : true
-              let diffusion = command["diffusion"] != nil ? command["diffusion"] as! Bool : true
-              let rotation = getBitmapConverterRotation(command["rotation"] as? String)
-              if command["absolutePosition"] != nil {
-                  let position = ((command["absolutePosition"] as? NSNumber)?.intValue ?? 0) != 0 ? (command["absolutePosition"] as? NSNumber)?.intValue ?? 0 : 40
-                  builder.appendBitmap(withAbsolutePosition: image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: position)
-              } else if command["alignment"] != nil {
-                  let alignment = getAlignment(command["alignment"] as?  String)
-                  builder.appendBitmap(withAlignment: image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: alignment)
-              } else {
-                  builder.appendBitmap(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation)
-              }
-          }
-      }
-  }
-  func getInternational(_ internationl: String?) -> SCBInternationalType {
-      if !(internationl ?? "").isEmpty {
-          if (internationl == "US") || (internationl == "USA") {
-              return SCBInternationalType.USA
-          } else if (internationl == "FR") || (internationl == "France") {
-              return SCBInternationalType.france
-          } else if (internationl == "UK") {
-              return SCBInternationalType.UK
-          } else if (internationl == "Germany") {
-              return SCBInternationalType.germany
-          } else if (internationl == "Denmark") {
-              return SCBInternationalType.denmark
-          } else if (internationl == "Sweden") {
-              return SCBInternationalType.sweden
-          } else if (internationl == "Italy") {
-              return SCBInternationalType.italy
-          } else if (internationl == "Spain") {
-              return SCBInternationalType.spain
-          } else if (internationl == "Japan") {
-              return SCBInternationalType.japan
-          } else if (internationl == "Norway") {
-              return SCBInternationalType.norway
-          } else if (internationl == "Denmark2") {
-              return SCBInternationalType.denmark2
-          } else if (internationl == "Spain2") {
-              return SCBInternationalType.spain2
-          } else if (internationl == "LatinAmerica") {
-              return SCBInternationalType.latinAmerica
-          } else if (internationl == "Korea") {
-              return SCBInternationalType.korea
-          } else if (internationl == "Ireland") {
-              return SCBInternationalType.ireland
-          } else if (internationl == "Legal") {
-              return SCBInternationalType.legal
-          } else {
-              return SCBInternationalType.USA
-          }
-      } else {
-          return SCBInternationalType.USA
-      }
-  }
-  func getEncoding(_ encoding: String?) -> String.Encoding {
-      if !(encoding ?? "").isEmpty {
-          if (encoding == "US-ASCII") {
-              return .ascii //English
-          } else if (encoding == "Windows-1252") {
-              return .windowsCP1252 //French, German, Portuguese, Spanish
-          } else if (encoding == "Shift-JIS") {
-              return .shiftJIS //Japanese
-          } else if (encoding == "Windows-1251") {
-              return .windowsCP1251 //Russian
-          } else if (encoding == "GB2312") {
-              return  String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))) // Simplified Chinese
-          } else if (encoding == "Big5") {
-              return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue))) // Traditional Chinese
-          } else if (encoding == "UTF-8") {
-              return .utf8 // UTF-8
-          }
-          return .windowsCP1252
-      } else {
-          return .ascii
-      }
-  }
-  func getCodePageType(_ codePageType: String?) -> SCBCodePageType {
-      if !(codePageType ?? "").isEmpty {
-          if (codePageType == "CP437") {
-              return SCBCodePageType.CP437
-          } else if (codePageType == "CP737") {
-              return SCBCodePageType.CP737
-          } else if (codePageType == "CP772") {
-              return SCBCodePageType.CP772
-          } else if (codePageType == "CP774") {
-              return SCBCodePageType.CP774
-          } else if (codePageType == "CP851") {
-              return SCBCodePageType.CP851
-          } else if (codePageType == "CP852") {
-              return SCBCodePageType.CP852
-          } else if (codePageType == "CP855") {
-              return SCBCodePageType.CP855
-          } else if (codePageType == "CP857") {
-              return SCBCodePageType.CP857
-          } else if (codePageType == "CP858") {
-              return SCBCodePageType.CP858
-          } else if (codePageType == "CP860") {
-              return SCBCodePageType.CP860
-          } else if (codePageType == "CP861") {
-              return SCBCodePageType.CP861
-          } else if (codePageType == "CP862") {
-              return SCBCodePageType.CP862
-          } else if (codePageType == "CP863") {
-              return SCBCodePageType.CP863
-          } else if (codePageType == "CP864") {
-              return SCBCodePageType.CP864
-          } else if (codePageType == "CP865") {
-              return SCBCodePageType.CP866
-          } else if (codePageType == "CP869") {
-              return SCBCodePageType.CP869
-          } else if (codePageType == "CP874") {
-              return SCBCodePageType.CP874
-          } else if (codePageType == "CP928") {
-              return SCBCodePageType.CP928
-          } else if (codePageType == "CP932") {
-              return SCBCodePageType.CP932
-          } else if (codePageType == "CP999") {
-              return SCBCodePageType.CP999
-          } else if (codePageType == "CP1001") {
-              return SCBCodePageType.CP1001
-          } else if (codePageType == "CP1250") {
-              return SCBCodePageType.CP1250
-          } else if (codePageType == "CP1251") {
-              return SCBCodePageType.CP1251
-          } else if (codePageType == "CP1252") {
-              return SCBCodePageType.CP1252
-          } else if (codePageType == "CP2001") {
-              return SCBCodePageType.CP2001
-          } else if (codePageType == "CP3001") {
-              return SCBCodePageType.CP3001
-          } else if (codePageType == "CP3002") {
-              return SCBCodePageType.CP3002
-          } else if (codePageType == "CP3011") {
-              return SCBCodePageType.CP3011
-          } else if (codePageType == "CP3012") {
-              return SCBCodePageType.CP3012
-          } else if (codePageType == "CP3021") {
-              return SCBCodePageType.CP3021
-          } else if (codePageType == "CP3041") {
-              return SCBCodePageType.CP3041
-          } else if (codePageType == "CP3840") {
-              return SCBCodePageType.CP3840
-          } else if (codePageType == "CP3841") {
-              return SCBCodePageType.CP3841
-          } else if (codePageType == "CP3843") {
-              return SCBCodePageType.CP3843
-          } else if (codePageType == "CP3845") {
-              return SCBCodePageType.CP3845
-          } else if (codePageType == "CP3846") {
-              return SCBCodePageType.CP3846
-          } else if (codePageType == "CP3847") {
-              return SCBCodePageType.CP3847
-          } else if (codePageType == "CP3848") {
-              return SCBCodePageType.CP3848
-          } else if (codePageType == "UTF8") {
-              return SCBCodePageType.UTF8
-          } else if (codePageType == "Blank") {
-              return SCBCodePageType.blank
-          } else {
-              return SCBCodePageType.CP998
-          }
-      } else {
-          return SCBCodePageType.CP998
-      }
-  }
-  func getFont(_ font: String?) -> SCBFontStyleType {
-      if !(font ?? "").isEmpty {
-          if (font == "A") {
-              return SCBFontStyleType.A
-          } else if (font == "B") {
-              return SCBFontStyleType.B
-          } else {
-              return SCBFontStyleType.A
-          }
-      } else {
-          return SCBFontStyleType.A
-      }
-  }
-  func getCutPaperAction(_ cutPaperAction: String?) -> SCBCutPaperAction {
-      if !(cutPaperAction ?? "").isEmpty {
-          if (cutPaperAction == "FullCut") {
-              return SCBCutPaperAction.fullCut
-          } else if (cutPaperAction == "FullCutWithFeed") {
-              return SCBCutPaperAction.fullCutWithFeed
-          } else if (cutPaperAction == "PartialCut") {
-              return SCBCutPaperAction.partialCut
-          } else if (cutPaperAction == "PartialCutWithFeed") {
-              return SCBCutPaperAction.partialCutWithFeed
-          } else {
-              return SCBCutPaperAction.partialCutWithFeed
-          }
-      } else {
-          return SCBCutPaperAction.partialCutWithFeed
-      }
-  }
-  func getPeripheralChannel(_ peripheralChannel: NSNumber?) -> SCBPeripheralChannel {
-      if peripheralChannel != nil {
-          if peripheralChannel?.intValue ?? 0 == 1 {
-              return SCBPeripheralChannel.no1
-          } else if peripheralChannel?.intValue ?? 0 == 2 {
-              return SCBPeripheralChannel.no2
-          } else {
-              return SCBPeripheralChannel.no1
-          }
-      } else {
-          return SCBPeripheralChannel.no1
-      }
-  }
-  func getBlackMarkType(_ blackMarkType: String?) -> SCBBlackMarkType {
-      if !(blackMarkType ?? "").isEmpty {
-          if (blackMarkType == "Valid") {
-              return SCBBlackMarkType.valid
-          } else if (blackMarkType == "Invalid") {
-              return SCBBlackMarkType.invalid
-          } else if (blackMarkType == "ValidWithDetection") {
-              return SCBBlackMarkType.validWithDetection
-          } else {
-              return SCBBlackMarkType.valid
-          }
-      } else {
-          return SCBBlackMarkType.valid
-      }
-  }
-  func getAlignment(_ alignment: String?) -> SCBAlignmentPosition {
-      if !(alignment ?? "").isEmpty {
-          if alignment?.caseInsensitiveCompare("left") == .orderedSame {
-              return SCBAlignmentPosition.left
-          } else if alignment?.caseInsensitiveCompare("center") == .orderedSame {
-              return SCBAlignmentPosition.center
-          } else if alignment?.caseInsensitiveCompare("right") == .orderedSame {
-              return SCBAlignmentPosition.right
-          } else {
-              return SCBAlignmentPosition.left
-          }
-      } else {
-          return SCBAlignmentPosition.left
-      }
-  }
-  func getLogoSize(_ logoSize: String?) -> SCBLogoSize {
-      if !(logoSize ?? "").isEmpty {
-          if (logoSize == "Normal") {
-              return SCBLogoSize.normal
-          } else if (logoSize == "DoubleWidth") {
-              return SCBLogoSize.doubleWidth
-          } else if (logoSize == "DoubleHeight") {
-              return SCBLogoSize.doubleHeight
-          } else if (logoSize == "DoubleWidthDoubleHeight") {
-              return SCBLogoSize.doubleWidthDoubleHeight
-          } else {
-              return SCBLogoSize.normal
-          }
-      } else {
-          return SCBLogoSize.normal
-      }
-  }
-  func getBarcodeSymbology(_ barcodeSymbology: String?) -> SCBBarcodeSymbology {
-      if !(barcodeSymbology ?? "").isEmpty {
-          if (barcodeSymbology == "Code128") {
-              return SCBBarcodeSymbology.code128
-          } else if (barcodeSymbology == "Code39") {
-              return SCBBarcodeSymbology.code39
-          } else if (barcodeSymbology == "Code93") {
-              return SCBBarcodeSymbology.code128
-          } else if (barcodeSymbology == "ITF") {
-              return SCBBarcodeSymbology.ITF
-          } else if (barcodeSymbology == "JAN8") {
-              return SCBBarcodeSymbology.JAN8
-          } else if (barcodeSymbology == "JAN13") {
-              return SCBBarcodeSymbology.JAN13
-          } else if (barcodeSymbology == "NW7") {
-              return SCBBarcodeSymbology.NW7
-          } else if (barcodeSymbology == "UPCA") {
-              return SCBBarcodeSymbology.UPCA
-          } else if (barcodeSymbology == "UPCE") {
-              return SCBBarcodeSymbology.UPCE
-          } else {
-              return SCBBarcodeSymbology.code128
-          }
-      } else {
-          return SCBBarcodeSymbology.code128
-      }
-  }
-  func getBarcodeWidth(_ barcodeWidth: String?) -> SCBBarcodeWidth {
-      if !(barcodeWidth ?? "").isEmpty {
-          if (barcodeWidth == "Mode1") {
-              return SCBBarcodeWidth.mode1
-          } else if (barcodeWidth == "Mode2") {
-              return SCBBarcodeWidth.mode2
-          } else if (barcodeWidth == "Mode3") {
-              return SCBBarcodeWidth.mode3
-          } else if (barcodeWidth == "Mode4") {
-              return SCBBarcodeWidth.mode4
-          } else if (barcodeWidth == "Mode5") {
-              return SCBBarcodeWidth.mode5
-          } else if (barcodeWidth == "Mode6") {
-              return SCBBarcodeWidth.mode6
-          } else if (barcodeWidth == "Mode7") {
-              return SCBBarcodeWidth.mode7
-          } else if (barcodeWidth == "Mode8") {
-              return SCBBarcodeWidth.mode8
-          } else if (barcodeWidth == "Mode9") {
-              return SCBBarcodeWidth.mode9
-          } else {
-              return SCBBarcodeWidth.mode2
-          }
-      } else {
-          return SCBBarcodeWidth.mode2
-      }
-  }
-  func getQrCodeModel(_ qrCodeModel: String?) -> SCBQrCodeModel {
-      if !(qrCodeModel ?? "").isEmpty {
-          if (qrCodeModel == "No1") {
-              return SCBQrCodeModel.no1
-          } else if (qrCodeModel == "No2") {
-              return SCBQrCodeModel.no2
-          } else {
-              return SCBQrCodeModel.no1
-          }
-      } else {
-          return SCBQrCodeModel.no1
-      }
-  }
-  func getQrCodeLevel(_ qrCodeLevel: String?) -> SCBQrCodeLevel {
-      if !(qrCodeLevel ?? "").isEmpty {
-          if (qrCodeLevel == "H") {
-              return SCBQrCodeLevel.H
-          } else if (qrCodeLevel == "L") {
-              return SCBQrCodeLevel.L
-          } else if (qrCodeLevel == "M") {
-              return SCBQrCodeLevel.M
-          } else if (qrCodeLevel == "Q") {
-              return SCBQrCodeLevel.Q
-          } else {
-              return SCBQrCodeLevel.H
-          }
-      } else {
-          return SCBQrCodeLevel.H
-      }
-  }
-  //  Converted to Swift 5.2 by Swiftify v5.2.29688 - https://swiftify.com/
-  func getBitmapConverterRotation(_ rotation: String?) -> SCBBitmapConverterRotation {
-      if !(rotation ?? "").isEmpty {
-          if (rotation == "Normal") {
-              return SCBBitmapConverterRotation.normal
-          } else if (rotation == "Left90") {
-              return SCBBitmapConverterRotation.left90
-          } else if (rotation == "Right90") {
-              return SCBBitmapConverterRotation.right90
-          } else if (rotation == "Rotate180") {
-              return SCBBitmapConverterRotation.rotate180
-          } else {
-              return SCBBitmapConverterRotation.normal
-          }
-      } else {
-          return SCBBitmapConverterRotation.normal
-      }
-  }
-  func imageWithString(string: String, font: UIFont, width: CGFloat) -> UIImage? {
-      let size = string.boundingRect(
-          with: CGSize(width: width, height: 10000),
-          options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-          attributes: [NSAttributedString.Key.font : font] ,
-          context: nil).size
-
-      if UIScreen.main.responds(to: #selector(getter: UIScreen.scale)) {
-          if UIScreen.main.scale == 2.0 {
-              UIGraphicsBeginImageContextWithOptions(size , false, 1.0)
-          } else {
-              UIGraphicsBeginImageContext(size )
-          }
-      } else {
-          UIGraphicsBeginImageContext(size )
-      }
-
-      let context = UIGraphicsGetCurrentContext()
-      UIColor.white.set()
-
-      let rect = CGRect(x: 0, y: 0, width: size.width + 1, height: size.height + 1)
-
-      context!.fill(rect)
-
-      let attributes = [
-              NSAttributedString.Key.foregroundColor: UIColor.black,
-              NSAttributedString.Key.font: font
-          ]
-      
-
-      string.draw(in: rect, withAttributes: attributes)
-
-      let imageToPrint = UIGraphicsGetImageFromCurrentImageContext()
-
-      UIGraphicsEndImageContext()
-
-      return imageToPrint
-  }
-  func sendCommand(portName:String,portSetting:String,command:[UInt8],result: FlutterResult){
-      var port :SMPort
-      var status: StarPrinterStatus_2 = StarPrinterStatus_2()
-
-      do {
-          port = try SMPort.getPort(portName: portName, portSettings: portSetting, ioTimeoutMillis: 10000)
-          let SM_TRUE =  SM_TRUESHARED
-          
-          var json = Dictionary<AnyHashable, Any>()
-          defer {
-              SMPort.release(port)
-          }
-          usleep(200000)
-          try port.beginCheckedBlock(starPrinterStatus: &status, level: 2)
-          json = portStatusToDictionary(status: status, firmwareInformation: [String:Any](),errorMsg: nil)
-          var isSucess = true
-            if (status.coverOpen == SM_TRUE) {
-            json["error_message"] = "Printer cover is open"
-            isSucess = false
-          } else if (status.receiptPaperEmpty == SM_TRUE) {
-            json["error_message"] = "Paper empty"
-            isSucess = false
-          }else if (status.presenterPaperJamError == SM_TRUE) {
-            json["error_message"] = "Paper Jam"
-            isSucess = false
-          }else if (status.offline == SM_TRUE) {
-            json["error_message"] = "A printer is offline"
-            isSucess = false
-          }
-
-          if (status.receiptPaperNearEmptyInner == SM_TRUE || status.receiptPaperNearEmptyOuter == SM_TRUE){
-            json["info_message"] = "Paper near empty"
-          }
-          if isSucess {
-              var total: UInt32 = 0
-              while total < UInt32(command.count) {
-                  var written: UInt32 = 0
-                  try port.write(writeBuffer: command, offset: total, size: UInt32(command.count) - total, numberOfBytesWritten: &written)
-                  total += written
-              }
-              try port.endCheckedBlock(starPrinterStatus: &status, level: 2)
-              let newStat = portStatusToDictionary(status: status, firmwareInformation: [String:Any](),errorMsg: nil)
-              
-              json.merge(newStat) {  (current, _) in current}
-              if (status.coverOpen == SM_TRUE) {
-                json["error_message"] = "Printer cover is open"
-              } else if (status.receiptPaperEmpty == SM_TRUE) {
-                json["error_message"] = "Paper empty"
-              }else if (status.presenterPaperJamError == SM_TRUE) {
-                json["error_message"] = "Paper Jam"
-              }else if (status.offline == SM_TRUE) {
-                json["error_message"] = "A printer is offline"
-                isSucess = false
-              }
-          }
-      
-          if (status.receiptPaperNearEmptyInner == SM_TRUE || status.receiptPaperNearEmptyOuter == SM_TRUE){
-            json["error_message"] = "Paper near empty"
-          }
-          json["is_success"] = isSucess
-          result(json)
-
-      } catch {
-          result(
-            FlutterError.init(code: "STARIO_PRINT_EXCEPTION", message: error.localizedDescription, details: nil)
-        )
-      }
-  }
+    
+    private func portDiscovery(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let interfaceType = arguments["type"] as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENT", message: "Type is required", details: nil))
+            return
+        }
+        
+        DispatchQueue.global(qos: .background).async {
+            do {
+                var searchPrinterArray: [Dictionary<String, String>] = []
+                
+                if interfaceType == "LAN" || interfaceType == "All" {
+                    let lanPrinters = SMPort.searchPrinter(target: "TCP:") as? [PortInfo] ?? []
+                    searchPrinterArray.append(contentsOf: self.mapPrinterInfo(portInfos: lanPrinters))
+                }
+                
+                if interfaceType == "Bluetooth" || interfaceType == "All" {
+                    let btPrinters = SMPort.searchPrinter(target: "BT:") as? [PortInfo] ?? []
+                    searchPrinterArray.append(contentsOf: self.mapPrinterInfo(portInfos: btPrinters))
+                }
+                
+                if interfaceType == "USB" || interfaceType == "All" {
+                    let usbPrinters = SMPort.searchPrinter(target: "USB:") as? [PortInfo] ?? []
+                    searchPrinterArray.append(contentsOf: self.mapPrinterInfo(portInfos: usbPrinters))
+                }
+                
+                DispatchQueue.main.async {
+                    result(searchPrinterArray)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "PORT_DISCOVERY_ERROR", message: error.localizedDescription, details: nil))
+                }
+            }
+        }
+    }
+    
+    private func mapPrinterInfo(portInfos: [PortInfo]) -> [[String: String]] {
+        return portInfos.map { portInfo in
+            var printerDict: [String: String] = [:]
+            
+            if portInfo.portName.starts(with: "BT:") {
+                printerDict["portName"] = "BT:\(portInfo.macAddress)"
+                
+                if !portInfo.macAddress.isEmpty {
+                    printerDict["macAddress"] = portInfo.macAddress
+                    printerDict["modelName"] = portInfo.portName
+                }
+            } else {
+                printerDict["portName"] = portInfo.portName
+                
+                if !portInfo.macAddress.isEmpty {
+                    printerDict["macAddress"] = portInfo.macAddress
+                    
+                    if !portInfo.modelName.isEmpty {
+                        printerDict["modelName"] = portInfo.modelName
+                    }
+                } else if portInfo.portName.starts(with: "USB:") {
+                    if !portInfo.modelName.isEmpty {
+                        printerDict["modelName"] = portInfo.modelName
+                    }
+                    
+                    if let serialNumber = portInfo.USBSerialNumber {
+                        printerDict["USBSerialNumber"] = serialNumber
+                    }
+                }
+            }
+            
+            return printerDict
+        }
+    }
+    
+    private func checkStatus(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let portName = arguments["portName"] as? String,
+              let emulation = arguments["emulation"] as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENT", message: "Required parameters missing", details: nil))
+            return
+        }
+        
+        DispatchQueue.global(qos: .background).async {
+            var port: SMPort?
+            
+            do {
+                let portSettings = self.getPortSettings(emulation: emulation)
+                port = try SMPort.getPort(portName: portName, portSettings: portSettings, ioTimeoutMillis: 10000)
+                
+                Thread.sleep(forTimeInterval: 0.5)
+                
+                let status = try port?.retrieveStatus()
+                var response: [String: Any] = [:]
+                
+                response["is_success"] = true
+                response["offline"] = status?.offline ?? false
+                response["coverOpen"] = status?.coverOpen ?? false
+                response["overTemp"] = status?.overTemp ?? false
+                response["cutterError"] = status?.cutterError ?? false
+                response["receiptPaperEmpty"] = status?.receiptPaperEmpty ?? false
+                
+                do {
+                    if let firmwareInfo = try port?.getFirmwareInformation() {
+                        response["ModelName"] = firmwareInfo["ModelName"]
+                        response["FirmwareVersion"] = firmwareInfo["FirmwareVersion"]
+                    }
+                } catch {
+                    response["error_message"] = error.localizedDescription
+                }
+                
+                DispatchQueue.main.async {
+                    result(response)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "CHECK_STATUS_ERROR", message: error.localizedDescription, details: nil))
+                }
+            }
+            
+            if let p = port {
+                SMPort.release(p)
+            }
+        }
+    }
+    
+    private var starIoExtManager: StarIoExtManager?
+    
+    private func connect(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let portName = arguments["portName"] as? String,
+              let emulation = arguments["emulation"] as? String else {
+            result(FlutterError(code: "INVALID_ARGUMENT", message: "Required parameters missing", details: nil))
+            return
+        }
+        
+        let hasBarcodeReader = arguments["hasBarcodeReader"] as? Bool ?? false
+        
+        DispatchQueue.global(qos: .background).async {
+            do {
+                let portSettings = self.getPortSettings(emulation: emulation)
+                
+                // Disconnect if already connected
+                if self.starIoExtManager != nil {
+                    self.starIoExtManager?.disconnect()
+                }
+                
+                let managerType: StarIoExtManagerType = hasBarcodeReader ? .withBarcodeReader : .standard
+                
+                self.starIoExtManager = StarIoExtManager(type: managerType, portName: portName, portSettings: portSettings, ioTimeoutMillis: 10000)
+                
+                self.starIoExtManager?.connect { connectResult in
+                    DispatchQueue.main.async {
+                        switch connectResult {
+                        case .success, .alreadyConnected:
+                            result("Printer Connected")
+                        default:
+                            result(FlutterError(code: "CONNECT_ERROR", message: "Error Connecting to the printer", details: nil))
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "CONNECT_ERROR", message: error.localizedDescription, details: nil))
+                }
+            }
+        }
+    }
+    
+    private func print(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let portName = arguments["portName"] as? String,
+              let emulation = arguments["emulation"] as? String,
+              let printCommands = arguments["printCommands"] as? [[String: Any]] else {
+            result(FlutterError(code: "INVALID_ARGUMENT", message: "Required parameters missing", details: nil))
+            return
+        }
+        
+        if printCommands.isEmpty {
+            let response: [String: Any] = [
+                "offline": false,
+                "coverOpen": false,
+                "cutterError": false,
+                "receiptPaperEmpty": false,
+                "info_message": "No data to print",
+                "is_success": true
+            ]
+            
+            result(response)
+            return
+        }
+        
+        DispatchQueue.global(qos: .background).async {
+            do {
+                let builder = ICommandBuilder.init(starIoExtEmulation: self.getEmulation(emulation: emulation))
+                builder.beginDocument()
+                self.appendCommands(builder: builder, printCommands: printCommands)
+                builder.endDocument()
+                
+                self.sendCommand(portName: portName, portSettings: self.getPortSettings(emulation: emulation), commands: builder.commands, result: result)
+            } catch {
+                DispatchQueue.main.async {
+                    result(FlutterError(code: "PRINT_ERROR", message: error.localizedDescription, details: nil))
+                }
+            }
+        }
+    }
+    
+    private func appendCommands(builder: ICommandBuilder, printCommands: [[String: Any]]) {
+        var encoding = String.Encoding.ascii
+        
+        for command in printCommands {
+            // Character Space
+            if let characterSpace = command["appendCharacterSpace"] as? Int {
+                builder.appendCharacterSpace(characterSpace)
+            }
+            
+            // Encoding
+            else if let encodingStr = command["appendEncoding"] as? String {
+                encoding = self.getEncoding(encoding: encodingStr)
+            }
+            
+            // Code Page
+            else if let codePage = command["appendCodePage"] as? String {
+                builder.appendCodePage(self.getCodePageType(codePage: codePage))
+            }
+            
+            // Basic Text
+            else if let text = command["append"] as? String {
+                builder.append(text.data(using: encoding)!)
+            }
+            
+            // Raw Text
+            else if let rawText = command["appendRaw"] as? String {
+                builder.append(rawText.data(using: encoding)!)
+            }
+            
+            // Multiple
+            else if let multiple = command["appendMultiple"] as? String {
+                let width = command["width"] as? Int ?? 2
+                let height = command["height"] as? Int ?? 2
+                builder.appendMultiple(multiple.data(using: encoding)!, width: width, height: height)
+            }
+            
+            // Emphasis
+            else if let emphasis = command["appendEmphasis"] as? String {
+                builder.appendEmphasis(emphasis.data(using: encoding)!)
+            }
+            else if let enableEmphasis = command["enableEmphasis"] as? Bool {
+                builder.appendEmphasis(enableEmphasis)
+            }
+            
+            // Invert
+            else if let invert = command["appendInvert"] as? String {
+                builder.appendInvert(invert.data(using: encoding)!)
+            }
+            else if let enableInvert = command["enableInvert"] as? Bool {
+                builder.appendInvert(enableInvert)
+            }
+            
+            // Underline
+            else if let underline = command["appendUnderline"] as? String {
+                builder.appendUnderLine(underline.data(using: encoding)!)
+            }
+            else if let enableUnderline = command["enableUnderline"] as? Bool {
+                builder.appendUnderLine(enableUnderline)
+            }
+            
+            // International
+            else if let international = command["appendInternational"] as? String {
+                builder.appendInternational(self.getInternational(international: international))
+            }
+            
+            // Line Feed
+            else if let lineFeed = command["appendLineFeed"] as? Int {
+                builder.appendLineFeed(lineFeed)
+            }
+            
+            // Unit Feed
+            else if let unitFeed = command["appendUnitFeed"] as? Int {
+                builder.appendUnitFeed(unitFeed)
+            }
+            
+            // Line Space
+            else if let lineSpace = command["appendLineSpace"] as? Int {
+                builder.appendLineSpace(lineSpace)
+            }
+            
+            // Font Style
+            else if let fontStyle = command["appendFontStyle"] as? String {
+                builder.appendFontStyle(self.getFontStyle(fontStyle: fontStyle))
+            }
+            
+            // Cut Paper
+            else if let cutPaper = command["appendCutPaper"] as? String {
+                builder.appendCutPaper(self.getCutPaperAction(action: cutPaper))
+            }
+            
+            // Cash Drawer
+            else if let openCashDrawer = command["openCashDrawer"] as? Int {
+                builder.appendPeripheral(self.getPeripheralChannel(channel: openCashDrawer))
+            }
+            
+            // Black Mark
+            else if let blackMark = command["appendBlackMark"] as? String {
+                builder.appendBlackMark(self.getBlackMarkType(type: blackMark))
+            }
+            
+            // Raw Bytes
+            else if let bytes = command["appendBytes"] as? String {
+                builder.append(bytes.data(using: encoding)!)
+            }
+            else if let rawBytes = command["appendRawBytes"] as? String {
+                builder.appendRaw(rawBytes.data(using: encoding)!)
+            }
+            
+            // Absolute Position
+            else if let absolutePosition = command["appendAbsolutePosition"] as? Int {
+                if let data = command["data"] as? String {
+                    builder.appendAbsolutePosition(data.data(using: encoding)!, position: absolutePosition)
+                } else {
+                    builder.appendAbsolutePosition(absolutePosition)
+                }
+            }
+            
+            // Alignment
+            else if let alignment = command["appendAlignment"] as? String {
+                if let data = command["data"] as? String {
+                    builder.appendAlignment(data.data(using: encoding)!, position: self.getAlignment(alignment: alignment))
+                } else {
+                    builder.appendAlignment(self.getAlignment(alignment: alignment))
+                }
+            }
+            
+            // Horizontal Tab Position
+            else if let tabPositions = command["appendHorizontalTabPosition"] as? [Int] {
+                builder.appendHorizontalTabPosition(tabPositions)
+            }
+            
+            // Logo
+            else if let logo = command["appendLogo"] as? Int {
+                let logoSizeStr = command["logoSize"] as? String ?? "Normal"
+                let logoSize = self.getLogoSize(logoSize: logoSizeStr)
+                builder.appendLogo(logoSize, number: logo)
+            }
+            
+            // Barcode
+            else if let barcode = command["appendBarcode"] as? String {
+                let symbology = self.getBarcodeSymbology(symbology: command["BarcodeSymbology"] as? String ?? "Code128")
+                let barcodeWidth = self.getBarcodeWidth(width: command["BarcodeWidth"] as? String ?? "Mode2")
+                let height = command["height"] as? Int ?? 40
+                let hri = command["hri"] as? Bool ?? true
+                
+                if let absolutePosition = command["absolutePosition"] as? Int {
+                    builder.appendBarcodeWithAbsolutePosition(barcode.data(using: encoding)!, symbology: symbology, width: barcodeWidth, height: height, hri: hri, position: absolutePosition)
+                } else if let alignmentStr = command["alignment"] as? String {
+                    let alignment = self.getAlignment(alignment: alignmentStr)
+                    builder.appendBarcodeWithAlignment(barcode.data(using: encoding)!, symbology: symbology, width: barcodeWidth, height: height, hri: hri, position: alignment)
+                } else {
+                    builder.appendBarcode(barcode.data(using: encoding)!, symbology: symbology, width: barcodeWidth, height: height, hri: hri)
+                }
+            }
+            
+            // Bitmap
+            else if let bitmapPath = command["appendBitmap"] as? String {
+                let diffusion = command["diffusion"] as? Bool ?? true
+                let width = command["width"] as? Int ?? 576
+                let bothScale = command["bothScale"] as? Bool ?? true
+                let rotation = self.getBitmapConverterRotation(rotation: command["rotation"] as? String ?? "Normal")
+                
+                if let image = self.loadImage(path: bitmapPath) {
+                    if let absolutePosition = command["absolutePosition"] as? Int {
+                        builder.appendBitmapWithAbsolutePosition(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: absolutePosition)
+                    } else if let alignmentStr = command["alignment"] as? String {
+                        let alignment = self.getAlignment(alignment: alignmentStr)
+                        builder.appendBitmapWithAlignment(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: alignment)
+                    } else {
+                        builder.appendBitmap(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation)
+                    }
+                }
+            }
+            
+            // Bitmap Text
+            else if let text = command["appendBitmapText"] as? String {
+                let fontSize = CGFloat(command["fontSize"] as? Float ?? 25.0)
+                let diffusion = command["diffusion"] as? Bool ?? true
+                let width = command["width"] as? Int ?? 576
+                let bothScale = command["bothScale"] as? Bool ?? true
+                let rotation = self.getBitmapConverterRotation(rotation: command["rotation"] as? String ?? "Normal")
+                
+                if let image = self.createBitmapFromText(text: text, fontSize: fontSize, width: CGFloat(width)) {
+                    if let absolutePosition = command["absolutePosition"] as? Int {
+                        builder.appendBitmapWithAbsolutePosition(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: absolutePosition)
+                    } else if let alignmentStr = command["alignment"] as? String {
+                        let alignment = self.getAlignment(alignment: alignmentStr)
+                        builder.appendBitmapWithAlignment(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: alignment)
+                    } else {
+                        builder.appendBitmap(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation)
+                    }
+                }
+            }
+            
+            // Bitmap Byte Array
+            else if let byteArray = command["appendBitmapByteArray"] as? FlutterStandardTypedData {
+                let diffusion = command["diffusion"] as? Bool ?? true
+                let width = command["width"] as? Int ?? 576
+                let bothScale = command["bothScale"] as? Bool ?? true
+                let rotation = self.getBitmapConverterRotation(rotation: command["rotation"] as? String ?? "Normal")
+                
+                if let image = UIImage(data: byteArray.data) {
+                    if let absolutePosition = command["absolutePosition"] as? Int {
+                        builder.appendBitmapWithAbsolutePosition(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: absolutePosition)
+                    } else if let alignmentStr = command["alignment"] as? String {
+                        let alignment = self.getAlignment(alignment: alignmentStr)
+                        builder.appendBitmapWithAlignment(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation, position: alignment)
+                    } else {
+                        builder.appendBitmap(image, diffusion: diffusion, width: width, bothScale: bothScale, rotation: rotation)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func loadImage(path: String) -> UIImage? {
+        if path.starts(with: "http://") || path.starts(with: "https://") {
+            if let url = URL(string: path), let data = try? Data(contentsOf: url) {
+                return UIImage(data: data)
+            }
+        } else {
+            return UIImage(contentsOfFile: path)
+        }
+        return nil
+    }
+    
+    private func createBitmapFromText(text: String, fontSize: CGFloat, width: CGFloat) -> UIImage? {
+        let font = UIFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: UIColor.black
+        ]
+        
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        let stringSize = attributedString.size()
+        
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: min(width, stringSize.width), height: stringSize.height))
+        return renderer.image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: renderer.format.bounds.size))
+            attributedString.draw(at: .zero)
+        }
+    }
+    
+    private func sendCommand(portName: String, portSettings: String, commands: Data, result: @escaping FlutterResult) {
+        var port: SMPort?
+        
+        do {
+            port = try SMPort.getPort(portName: portName, portSettings: portSettings, ioTimeoutMillis: 10000)
+            Thread.sleep(forTimeInterval: 0.1)
+            
+            guard let printerStatus = try port?.beginCheckedBlock() else {
+                result(FlutterError(code: "PRINT_ERROR", message: "Failed to get printer status", details: nil))
+                return
+            }
+            
+            if !self.validatePrinterStatus(status: printerStatus) {
+                self.sendPrinterResponse(status: printerStatus, isSuccess: false, errorMessage: self.getPrinterError(status: printerStatus), result: result)
+                return
+            }
+            
+            try port?.write(commands, offset: 0, size: commands.count)
+            port?.setEndCheckedBlockTimeoutMillis(30000)
+            let finalStatus = try port?.endCheckedBlock()
+            
+            self.sendPrinterResponse(status: finalStatus, isSuccess: true, errorMessage: nil, result: result)
+        } catch {
+            DispatchQueue.main.async {
+                result(FlutterError(code: "PRINT_ERROR", message: error.localizedDescription, details: nil))
+            }
+        }
+        
+        if let p = port {
+            SMPort.release(p)
+        }
+    }
+    
+    private func validatePrinterStatus(status: StarPrinterStatus_2) -> Bool {
+        return !status.offline && !status.coverOpen && !status.receiptPaperEmpty && !status.presenterPaperJamError
+    }
+    
+    private func getPrinterError(status: StarPrinterStatus_2?) -> String? {
+        guard let status = status else { return "Unknown error" }
+        
+        if status.offline { return "Printer is offline" }
+        if status.coverOpen { return "Printer cover is open" }
+        if status.receiptPaperEmpty { return "Paper empty" }
+        if status.presenterPaperJamError { return "Paper jam" }
+        
+        return nil
+    }
+    
+    private func sendPrinterResponse(status: StarPrinterStatus_2?, isSuccess: Bool, errorMessage: String?, result: @escaping FlutterResult) {
+        let response: [String: Any] = [
+            "offline": status?.offline ?? false,
+            "coverOpen": status?.coverOpen ?? false,
+            "cutterError": status?.cutterError ?? false,
+            "receiptPaperEmpty": status?.receiptPaperEmpty ?? false,
+            "is_success": isSuccess,
+            "error_message": errorMessage ?? NSNull()
+        ]
+        
+        DispatchQueue.main.async {
+            result(response)
+        }
+    }
+    
+    // Helper methods to convert string parameters to appropriate enum types
+    
+    private func getPortSettings(emulation: String) -> String {
+        switch emulation {
+        case "EscPosMobile":
+            return "mini"
+        case "EscPos":
+            return "escpos"
+        case "StarPRNT", "StarPRNTL":
+            return "Portable;l"
+        default:
+            return emulation
+        }
+    }
+    
+    private func getEmulation(emulation: String) -> StarIoExtEmulation {
+        switch emulation {
+        case "StarPRNT":
+            return .starPRNT
+        case "StarPRNTL":
+            return .starPRNTL
+        case "StarLine":
+            return .starLine
+        case "StarGraphic":
+            return .starGraphic
+        case "EscPos":
+            return .escPos
+        case "EscPosMobile":
+            return .escPosMobile
+        case "StarDotImpact":
+            return .starDotImpact
+        default:
+            return .starLine
+        }
+    }
+    
+    private func getCutPaperAction(action: String) -> SCBCutPaperAction {
+        switch action {
+        case "FullCut":
+            return .fullCut
+        case "FullCutWithFeed":
+            return .fullCutWithFeed
+        case "PartialCut":
+            return .partialCut
+        case "PartialCutWithFeed":
+            return .partialCutWithFeed
+        default:
+            return .partialCutWithFeed
+        }
+    }
+    
+    private func getAlignment(alignment: String) -> SCBAlignmentPosition {
+        switch alignment {
+        case "Left":
+            return .left
+        case "Center":
+            return .center
+        case "Right":
+            return .right
+        default:
+            return .left
+        }
+    }
+    
+    private func getBitmapConverterRotation(rotation: String) -> SCBBitmapConverterRotation {
+        switch rotation {
+        case "Left90":
+            return .left90
+        case "Right90":
+            return .right90
+        case "Rotate180":
+            return .rotate180
+        default:
+            return .normal
+        }
+    }
+    
+    private func getBarcodeSymbology(symbology: String) -> SCBBarcodeSymbology {
+        switch symbology {
+        case "Code39":
+            return .code39
+        case "Code93":
+            return .code93
+        case "ITF":
+            return .ITF
+        case "JAN8":
+            return .JAN8
+        case "JAN13":
+            return .JAN13
+        case "NW7":
+            return .NW7
+        case "UPCA":
+            return .UPCA
+        case "UPCE":
+            return .UPCE
+        default:
+            return .code128
+        }
+    }
+    
+    private func getBarcodeWidth(width: String) -> SCBBarcodeWidth {
+        switch width {
+        case "Mode1":
+            return .mode1
+        case "Mode3":
+            return .mode3
+        case "Mode4":
+            return .mode4
+        case "Mode5":
+            return .mode5
+        case "Mode6":
+            return .mode6
+        case "Mode7":
+            return .mode7
+        case "Mode8":
+            return .mode8
+        case "Mode9":
+            return .mode9
+        default:
+            return .mode2
+        }
+    }
+    
+    private func getInternational(international: String) -> SCBInternationalType {
+        switch international {
+        case "UK":
+            return .UK
+        case "France":
+            return .france
+        case "Germany":
+            return .germany
+        case "Denmark":
+            return .denmark
+        case "Sweden":
+            return .sweden
+        case "Italy":
+            return .italy
+        case "Spain":
+            return .spain
+        case "Japan":
+            return .japan
+        case "Norway":
+            return .norway
+        case "Denmark2":
+            return .denmark2
+        case "Spain2":
+            return .spain2
+        case "LatinAmerica":
+            return .latinAmerica
+        case "Korea":
+            return .korea
+        case "Ireland":
+            return .ireland
+        case "Legal":
+            return .legal
+        default:
+            return .USA
+        }
+    }
+    
+    private func getFontStyle(fontStyle: String) -> SCBFontStyleType {
+        switch fontStyle {
+        case "A":
+            return .A
+        case "B":
+            return .B
+        default:
+            return .A
+        }
+    }
+    
+    private func getPeripheralChannel(channel: Int) -> SCBPeripheralChannel {
+        switch channel {
+        case 1:
+            return .no1
+        case 2:
+            return .no2
+        default:
+            return .no1
+        }
+    }
+    
+    private func getBlackMarkType(type: String) -> SCBBlackMarkType {
+        switch type {
+        case "Valid":
+            return .valid
+        case "Invalid":
+            return .invalid
+        case "ValidWithDetection":
+            return .validWithDetection
+        default:
+            return .valid
+        }
+    }
+    
+    private func getLogoSize(logoSize: String) -> SCBLogoSize {
+        switch logoSize {
+        case "Normal":
+            return .normal
+        case "DoubleWidth":
+            return .doubleWidth
+        case "DoubleHeight":
+            return .doubleHeight
+        case "DoubleWidthDoubleHeight":
+            return .doubleWidthDoubleHeight
+        default:
+            return .normal
+        }
+    }
+    
+    private func getCodePageType(codePage: String) -> SCBCodePageType {
+        switch codePage {
+        case "CP437":
+            return .CP437
+        case "CP737":
+            return .CP737
+        case "CP772":
+            return .CP772
+        case "CP774":
+            return .CP774
+        case "CP851":
+            return .CP851
+        case "CP852":
+            return .CP852
+        case "CP855":
+            return .CP855
+        case "CP857":
+            return .CP857
+        case "CP858":
+            return .CP858
+        case "CP860":
+            return .CP860
+        case "CP861":
+            return .CP861
+        case "CP862":
+            return .CP862
+        case "CP863":
+            return .CP863
+        case "CP864":
+            return .CP864
+        case "CP865":
+            return .CP865
+        case "CP869":
+            return .CP869
+        case "CP874":
+            return .CP874
+        case "CP928":
+            return .CP928
+        case "CP932":
+            return .CP932
+        case "CP999":
+            return .CP999
+        case "CP1001":
+            return .CP1001
+        case "CP1250":
+            return .CP1250
+        case "CP1251":
+            return .CP1251
+        case "CP1252":
+            return .CP1252
+        case "CP2001":
+            return .CP2001
+        case "CP3001":
+            return .CP3001
+        case "CP3002":
+            return .CP3002
+        case "CP3011":
+            return .CP3011
+        case "CP3012":
+            return .CP3012
+        case "CP3021":
+            return .CP3021
+        case "CP3041":
+            return .CP3041
+        case "CP3840":
+            return .CP3840
+        case "CP3841":
+            return .CP3841
+        case "CP3843":
+            return .CP3843
+        case "CP3845":
+            return .CP3845
+        case "CP3846":
+            return .CP3846
+        case "CP3847":
+            return .CP3847
+        case "CP3848":
+            return .CP3848
+        case "UTF8":
+            return .UTF8
+        case "Blank":
+            return .blank
+        default:
+            return .CP998
+        }
+    }
+    
+    private func getEncoding(encoding: String) -> String.Encoding {
+        switch encoding {
+        case "Windows-1252":
+            return .windowsCP1252
+        case "Shift-JIS":
+            if let _ = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.shiftJIS.rawValue))) {
+                return .shiftJIS
+            }
+            return .utf8
+        case "Windows-1251":
+            if let _ = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.windowsCyrillic.rawValue))) {
+                return .windowsCP1251
+            }
+            return .utf8
+        case "GB2312":
+            if let _ = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))) {
+                return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+            }
+            return .utf8
+        case "Big5":
+            if let _ = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.big5.rawValue))) {
+                return .big5
+            }
+            return .utf8
+        case "UTF-8":
+            return .utf8
+        default:
+            return .ascii
+        }
+    }
 }
