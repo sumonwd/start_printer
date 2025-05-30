@@ -10,7 +10,7 @@ public class StartPrinterPlugin: NSObject, FlutterPlugin {
         registrar.addMethodCallDelegate(instance, channel: channel)
     }
     
-   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch (call.method) {
             case "portDiscovery":
                 portDiscovery(call, result: result)
@@ -233,20 +233,8 @@ public class StartPrinterPlugin: NSObject, FlutterPlugin {
                 } else {
                     builder.appendLogo(SCBLogoSize.normal, number: command["appendLogo"] as! Int)
                 }
-            } else if (command["appendBarcode"] != nil) {
-                let barcodeSymbology :SCBBarcodeSymbology = getBarcodeSymbology(command["BarcodeSymbology"] as? String)
-                let barcodeWidth :SCBBarcodeWidth = getBarcodeWidth(command["BarcodeWidth"] as? String)
-                let height = command["height"] != nil ? command["height"] as! Int : 40
-                let hri = command["hri"] != nil ? command["hri"] as! Bool : true
-
-                if (command["absolutePosition"] != nil) {
-                    builder.appendBarcodeData(withAbsolutePosition: (command["appendBarcode"] as! String).data(using: encoding), symbology: barcodeSymbology, width: barcodeWidth, height: height, hri: hri, position: command["absolutePosition"] as! Int)
-                } else if (command["alignment"] != nil) {
-                    builder.appendBarcodeData(withAlignment: (command["appendBarcode"] as! String).data(using: encoding), symbology: barcodeSymbology, width: barcodeWidth, height: height, hri: hri, position: getAlignment(command["alignment"] as? String))
-                } else {
-                    builder.appendBarcodeData((command["appendBarcode"] as! String).data(using: encoding), symbology: barcodeSymbology, width: barcodeWidth, height: height, hri: hri)
-                }
-            } else if (command["appendQrCode"] != nil) {
+            } 
+             else if (command["appendQrCode"] != nil) {
                 let qrCodeModel = getQrCodeModel(command["QrCodeModel"] as? String)
                 let qrCodeLevel = getQrCodeLevel(command["QrCodeLevel"] as? String)
                 let cell = command["cell"] != nil ? command["cell"] as! Int : 4

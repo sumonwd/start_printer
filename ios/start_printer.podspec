@@ -16,9 +16,12 @@ A new Flutter plugin project.
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
   s.platform = :ios, '11.0'
+  s.frameworks = 'CoreBluetooth'
 
   # Use local references to the SDK files
-  s.vendored_frameworks = 'Frameworks/StarIO.framework', 'Frameworks/StarIO_Extension.framework'
+  s.preserve_paths = 'Frameworks/*.framework'
+  s.vendored_frameworks = 'Frameworks/*.framework'
+  
 
 # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
