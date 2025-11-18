@@ -16,11 +16,14 @@ A new Flutter plugin project.
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'
   s.platform = :ios, '11.0'
-  s.frameworks = 'CoreBluetooth'
+
+  # System frameworks required by StarIO SDK
+  s.frameworks = 'CoreBluetooth', 'ExternalAccessory'
 
   # Use local references to the SDK files
   s.preserve_paths = 'Frameworks/*.framework'
   s.vendored_frameworks = 'Frameworks/*.framework'
+  s.xcconfig = { 'OTHER_LDFLAGS' => '-framework CoreBluetooth -framework ExternalAccessory' }
   
 
 # Flutter.framework does not contain a i386 slice.
